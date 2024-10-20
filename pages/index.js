@@ -51,14 +51,15 @@ export default function Home() {
 
     useEffect(() => {
         if (session) {
-            fetchTasks(1, searchTerm)
+            fetchTasks(currentPage, searchTerm)
         }
-    }, [session, searchTerm])
+    }, [session, searchTerm, currentPage])
 
     const fetchTasks = async (page = 1, search = searchTerm) => {
         if (!session) return
         try {
-            const res = await fetch(`/api/tasks?page=${page}&search=${encodeURIComponent(search)}`)
+            setLoading(true);
+            const res = await fetch(`/api/tasks?page=${page}&search=${encodeURIComponent(search)}&limit=${tasksPerPage}`)
             if (res.ok) {
                 const data = await res.json()
                 setTasks(data.tasks)
@@ -71,6 +72,8 @@ export default function Home() {
         } catch (error) {
             console.error('Error fetching tasks:', error)
             toast.error('An error occurred while fetching tasks')
+        } finally {
+            setLoading(false);
         }
     }
 
@@ -102,6 +105,7 @@ export default function Home() {
             setTasks(prevTasks => Array.isArray(prevTasks) ? [...prevTasks, addedTask] : [addedTask]);
             setNewTask({ title: '', category: '', dueDate: '', priority: 1 });
             toast.success('Task added successfully');
+            fetchTasks(1); // Refetch the first page of tasks
         } catch (error) {
             console.error('Error adding task:', error);
             toast.error(error.message || 'Failed to add task');
@@ -142,6 +146,7 @@ export default function Home() {
             setTasks(prevTasks => prevTasks.map(task => task.id === id ? updatedTask : task));
             setEditingTask(null); // Clear editing state
             toast.success('Task updated successfully');
+            fetchTasks(currentPage); // Refetch the current page of tasks
         } catch (error) {
             console.error('Error updating task:', error);
             toast.error(error.message || 'Failed to update task');
@@ -157,6 +162,7 @@ export default function Home() {
             }
             setTasks(prevTasks => prevTasks.filter(task => task.id !== id));
             toast.success('Task deleted successfully');
+            fetchTasks(currentPage); // Refetch the current page of tasks
         } catch (error) {
             console.error('Error deleting task:', error);
             toast.error(error.message || 'Failed to delete task');
@@ -183,11 +189,15 @@ export default function Home() {
     const currentTasks = tasks.slice(indexOfFirstTask, indexOfLastTask);
 
     const handlePrevPage = () => {
-        setCurrentPage(prevPage => Math.max(prevPage - 1, 1));
+        if (currentPage > 1) {
+            fetchTasks(currentPage - 1);
+        }
     };
 
     const handleNextPage = () => {
-        setCurrentPage(prevPage => Math.min(prevPage + 1, Math.ceil(tasks.length / tasksPerPage)));
+        if (currentPage < totalPages) {
+            fetchTasks(currentPage + 1);
+        }
     };
 
     if (error) {
@@ -274,7 +284,9 @@ export default function Home() {
                     </form>
 
                     <ul className="space-y-4">
-                        {Array.isArray(tasks) && tasks.length > 0 ? (
+                        {loading ? (
+                            <li>Loading tasks...</li>
+                        ) : tasks.length > 0 ? (
                             tasks.map(task => (
                                 <li key={task.id} className="p-4 border rounded shadow mb-4">
                                     {editingTask && editingTask.id === task.id ? (
@@ -348,7 +360,7 @@ export default function Home() {
                         <div className="flex justify-between items-center mt-4">
                             <button
                                 onClick={handlePrevPage}
-                                disabled={currentPage === 1}
+                                disabled={currentPage === 1 || loading}
                                 className="bg-blue-500 text-white px-4 py-2 rounded disabled:bg-gray-300"
                             >
                                 Previous
@@ -356,7 +368,7 @@ export default function Home() {
                             <span>Page {currentPage} of {totalPages} (Total tasks: {totalTasks})</span>
                             <button
                                 onClick={handleNextPage}
-                                disabled={currentPage === totalPages}
+                                disabled={currentPage === totalPages || loading}
                                 className="bg-blue-500 text-white px-4 py-2 rounded disabled:bg-gray-300"
                             >
                                 Next

@@ -25,20 +25,26 @@ export default async function handler(req, res) {
         try {
             const { id } = req.query
             const updates = req.body
+
+            // Validate the updates
+            await taskSchema.validate(updates, { abortEarly: false, strict: false });
+
             const updatedTask = await prisma.task.update({
                 where: { id: id, userId: userId },
                 data: {
-                    ...(updates.title !== undefined && { title: updates.title }),
-                    ...(updates.category !== undefined && { category: updates.category }),
-                    ...(updates.dueDate !== undefined && { dueDate: updates.dueDate ? new Date(updates.dueDate) : null }),
-                    ...(updates.priority !== undefined && { priority: Number(updates.priority) }),
-                    ...(updates.completed !== undefined && { completed: updates.completed })
+                    ...updates,
+                    dueDate: updates.dueDate ? new Date(updates.dueDate) : null,
+                    priority: updates.priority ? Number(updates.priority) : undefined
                 }
             })
             res.status(200).json(updatedTask)
         } catch (error) {
-            console.error('Error updating task:', error)
-            res.status(500).json({ error: 'Failed to update task' })
+            if (error instanceof Yup.ValidationError) {
+                res.status(400).json({ error: error.errors });
+            } else {
+                console.error('Error updating task:', error);
+                res.status(500).json({ error: 'Failed to update task' });
+            }
         }
     }
 
@@ -58,29 +64,30 @@ export default async function handler(req, res) {
         }
     } else if (req.method === 'POST') {
         try {
-            const { title, category, dueDate, priority } = req.body;
+            const taskData = req.body;
 
-            // Validation
-            if (!title || !category || !dueDate) {
-                return res.status(400).json({ error: 'Title, category, and due date are required' });
-            }
+            // Validate the task data
+            await taskSchema.validate(taskData, { abortEarly: false });
 
             const task = await prisma.task.create({
                 data: {
-                    title,
-                    category,
-                    dueDate: new Date(dueDate),
-                    priority: Number(priority),
+                    ...taskData,
+                    dueDate: taskData.dueDate ? new Date(taskData.dueDate) : null,
+                    priority: Number(taskData.priority),
                     userId
                 }
             });
             res.status(201).json(task);
         } catch (error) {
-            console.error('Error creating task:', error);
-            res.status(500).json({ error: 'Failed to create task' });
+            if (error instanceof Yup.ValidationError) {
+                res.status(400).json({ error: error.errors });
+            } else {
+                console.error('Error creating task:', error);
+                res.status(500).json({ error: 'Failed to create task' });
+            }
         }
     } else if (req.method === 'GET') {
-        const { page = 1, limit = 5 } = req.query;
+        const { page = 1, limit = ITEMS_PER_PAGE } = req.query;
         const skip = (page - 1) * limit;
 
         try {
@@ -92,8 +99,14 @@ export default async function handler(req, res) {
             });
 
             const totalTasks = await prisma.task.count({ where: { userId: userId } });
+            const totalPages = Math.ceil(totalTasks / limit);
 
-            res.status(200).json({ tasks, totalTasks });
+            res.status(200).json({
+                tasks,
+                totalTasks,
+                currentPage: parseInt(page),
+                totalPages
+            });
         } catch (error) {
             console.error('Error fetching tasks:', error);
             res.status(500).json({ error: 'Failed to fetch tasks' });
