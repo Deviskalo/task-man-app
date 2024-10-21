@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useSession, signOut } from "next-auth/react"
 import { useRouter } from 'next/router'
 import Head from 'next/head'
@@ -8,13 +8,31 @@ import * as Yup from 'yup'
 import { CATEGORIES } from '../utils/constants'
 import ErrorBoundary from '../components/ErrorBoundary'
 import LoadingSpinner from '../components/LoadingSpinner'
+import { parse, isValid, startOfDay } from 'date-fns'
+import debounce from 'lodash/debounce'
+
 
 const taskSchema = Yup.object().shape({
     title: Yup.string().required('Title is required').max(100, 'Title is too long'),
     category: Yup.string().max(50, 'Category is too long'),
-    dueDate: Yup.date().nullable().min(new Date(), 'Due date cannot be in the past'),
+    dueDate: Yup.mixed()
+        .nullable()
+        .test('is-date', 'Invalid date format', function (value) {
+            if (!value) return true; // Allow null values
+            if (value instanceof Date) return isValid(value);
+            if (typeof value === 'string') {
+                const parsedDate = parse(value, 'yyyy-MM-dd', new Date());
+                return isValid(parsedDate);
+            }
+            return false;
+        })
+        .test('not-past', 'Due date cannot be in the past', function (value) {
+            if (!value) return true;
+            const date = value instanceof Date ? value : parse(value, 'yyyy-MM-dd', new Date());
+            return date >= startOfDay(new Date());
+        }),
     priority: Yup.number().oneOf([1, 2, 3], 'Invalid priority')
-})
+});
 
 const priorityColors = {
     1: 'bg-green-200 text-green-800',
@@ -39,10 +57,25 @@ export default function Home() {
     const [totalTasks, setTotalTasks] = useState(0)
     const [newCategory, setNewCategory] = useState(CATEGORIES[0])
     const [searchTerm, setSearchTerm] = useState('')
+    const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
     const [editingTask, setEditingTask] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [tasksPerPage] = useState(5); // You can adjust this number as needed
+    const [tasksPerPage] = useState(5);
+
+    // Create a debounced search function
+    const debouncedSearch = useCallback(
+        debounce((value) => {
+            setDebouncedSearchTerm(value);
+        }, 400),
+        []
+    );
+
+    // Update the search term and trigger the debounced search
+    const handleSearchChange = (e) => {
+        setSearchTerm(e.target.value);
+        debouncedSearch(e.target.value);
+    };
 
     useEffect(() => {
         if (status === "unauthenticated") {
@@ -52,11 +85,11 @@ export default function Home() {
 
     useEffect(() => {
         if (session) {
-            fetchTasks(currentPage, searchTerm)
+            fetchTasks(currentPage, debouncedSearchTerm)
         }
-    }, [session, searchTerm, currentPage])
+    }, [session, debouncedSearchTerm, currentPage])
 
-    const fetchTasks = async (page = currentPage, search = searchTerm) => {
+    const fetchTasks = async (page = currentPage, search = debouncedSearchTerm) => {
         if (!session) return;
         try {
             setLoading(true);
@@ -81,12 +114,27 @@ export default function Home() {
     const addTask = async (e) => {
         e.preventDefault();
         try {
+            // Create a copy of newTask with the date properly formatted
+            const taskToValidate = {
+                ...newTask,
+                dueDate: newTask.dueDate ? parse(newTask.dueDate, 'yyyy-MM-dd', new Date()) : null
+            };
+
+            // Validate the new task using taskSchema
+            await taskSchema.validate(taskToValidate);
+
+            // For sending to the server, convert Date object to ISO string
+            const taskToSend = {
+                ...taskToValidate,
+                dueDate: taskToValidate.dueDate ? taskToValidate.dueDate.toISOString() : null
+            };
+
             const response = await fetch('/api/tasks', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(newTask),
+                body: JSON.stringify(taskToSend),
             });
 
             if (!response.ok) {
@@ -104,7 +152,12 @@ export default function Home() {
             toast.success('Task added successfully');
         } catch (error) {
             console.error('Error adding task:', error);
-            toast.error(error.message || 'Failed to add task');
+            if (error instanceof Yup.ValidationError) {
+                // If it's a validation error, show the specific error message
+                toast.error(error.message);
+            } else {
+                toast.error(error.message || 'Failed to add task');
+            }
         }
     };
 
@@ -234,7 +287,7 @@ export default function Home() {
                         <input
                             type="text"
                             value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
+                            onChange={handleSearchChange}
                             placeholder="Search tasks here..."
                             className="w-full p-2 border rounded"
                         />
@@ -346,7 +399,9 @@ export default function Home() {
                                             <div className="flex justify-around items-center mt-2 text-sm text-gray-600">
                                                 <p>Category: {task.category}</p>
                                                 <p>Due Date: {new Date(task.dueDate).toLocaleDateString()}</p>
-                                                <p>Priority: {task.priority}</p>
+                                                <p className={`px-2 py-1 rounded ${priorityColors[task.priority]}`}>
+                                                    Priority: {priorityLabels[task.priority - 1]}
+                                                </p>
                                             </div>
                                         </>
                                     )}
