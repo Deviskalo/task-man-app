@@ -4,7 +4,7 @@ import prisma from "../../../lib/prisma"
 import bcrypt from "bcrypt"
 import { openDb } from '../../../lib/db'
 
-export default NextAuth({
+export const authOptions = {
     providers: [
         CredentialsProvider({
             name: "Credentials",
@@ -51,12 +51,35 @@ export default NextAuth({
         async session({ session, token }) {
             if (token) {
                 session.user.id = token.id
+                // Fetch the latest user data from the database
+                const db = await openDb()
+                const user = await db.get('SELECT * FROM users WHERE id = ?', [token.id])
+                if (user) {
+                    session.user.name = user.name
+                }
             }
             return session
+        },
+        async signIn({ user }) {
+            const db = await openDb()
+            const existingUser = await db.get('SELECT * FROM users WHERE email = ?', [user.email])
+
+            if (!existingUser) {
+                // Create the user if they don't exist
+                await db.run(
+                    'INSERT INTO users (id, name, email) VALUES (?, ?, ?)',
+                    [user.id, user.name, user.email]
+                )
+                console.log("New user created in database:", user)
+            }
+
+            return true
         },
     },
     pages: {
         signIn: '/login',
     },
     secret: process.env.NEXTAUTH_SECRET,
-})
+}
+
+export default NextAuth(authOptions)
