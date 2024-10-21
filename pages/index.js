@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession, signOut } from "next-auth/react"
 import { useRouter } from 'next/router'
 import Head from 'next/head'
@@ -10,6 +10,8 @@ import ErrorBoundary from '../components/ErrorBoundary'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { parse, isValid, startOfDay } from 'date-fns'
 import debounce from 'lodash/debounce'
+import Image from 'next/image'
+import EditProfile from '../components/EditProfile'
 
 
 const taskSchema = Yup.object().shape({
@@ -62,6 +64,9 @@ export default function Home() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [tasksPerPage] = useState(5);
+    const [isProfileOpen, setIsProfileOpen] = useState(false)
+    const profileRef = useRef(null)
+    const [isEditProfileOpen, setIsEditProfileOpen] = useState(false)
 
     // Create a debounced search function
     const debouncedSearch = useCallback(
@@ -88,6 +93,17 @@ export default function Home() {
             fetchTasks(currentPage, debouncedSearchTerm)
         }
     }, [session, debouncedSearchTerm, currentPage])
+
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (profileRef.current && !profileRef.current.contains(event.target)) {
+                setIsProfileOpen(false)
+            }
+        }
+
+        document.addEventListener('mousedown', handleClickOutside)
+        return () => document.removeEventListener('mousedown', handleClickOutside)
+    }, [])
 
     const fetchTasks = async (page = currentPage, search = debouncedSearchTerm) => {
         if (!session) return;
@@ -277,9 +293,38 @@ export default function Home() {
                 <main>
                     <div className="flex justify-between items-center mb-4">
                         <h1 className="text-2xl font-bold">Task Manager</h1>
-                        <button onClick={handleSignOut} className="bg-red-500 text-white px-4 py-2 rounded">
-                            Sign Out
-                        </button>
+                        {status === "authenticated" && session && (
+                            <div className="relative" ref={profileRef}>
+                                <button
+                                    onClick={() => setIsProfileOpen(!isProfileOpen)}
+                                    className="flex items-center space-x-2 bg-blue-500 text-white px-4 py-2 rounded-full hover:bg-blue-600 transition duration-300"
+                                >
+                                    {session.user.image ? (
+                                        <Image
+                                            src={session.user.image}
+                                            alt="Profile"
+                                            width={32}
+                                            height={32}
+                                            className="rounded-full"
+                                        />
+                                    ) : (
+                                        <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center">
+                                            {session.user.name ? session.user.name[0].toUpperCase() : 'U'}
+                                        </div>
+                                    )}
+                                    <span>{session.user.name || 'User'}</span>
+                                </button>
+                                {isProfileOpen && (
+                                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-md overflow-hidden shadow-xl z-10">
+                                        <a href="#" onClick={() => {
+                                            setIsEditProfileOpen(true)
+                                            setIsProfileOpen(false)
+                                        }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Edit Profile</a>
+                                        <a href="#" onClick={() => signOut()} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Sign out</a>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {/* Search Box */}
@@ -432,6 +477,7 @@ export default function Home() {
                     )}
                 </main>
             </div>
+            {isEditProfileOpen && <EditProfile onClose={() => setIsEditProfileOpen(false)} />}
         </ErrorBoundary>
     )
 }
