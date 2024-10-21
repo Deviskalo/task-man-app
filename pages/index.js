@@ -7,6 +7,7 @@ import toast from 'react-hot-toast'
 import * as Yup from 'yup'
 import { CATEGORIES } from '../utils/constants'
 import ErrorBoundary from '../components/ErrorBoundary'
+import LoadingSpinner from '../components/LoadingSpinner'
 
 const taskSchema = Yup.object().shape({
     title: Yup.string().required('Title is required').max(100, 'Title is too long'),
@@ -55,57 +56,52 @@ export default function Home() {
         }
     }, [session, searchTerm, currentPage])
 
-    const fetchTasks = async (page = 1, search = searchTerm) => {
-        if (!session) return
+    const fetchTasks = async (page = currentPage, search = searchTerm) => {
+        if (!session) return;
         try {
             setLoading(true);
-            const res = await fetch(`/api/tasks?page=${page}&search=${encodeURIComponent(search)}&limit=${tasksPerPage}`)
+            const res = await fetch(`/api/tasks?page=${page}&search=${encodeURIComponent(search)}&limit=${tasksPerPage}`);
             if (res.ok) {
-                const data = await res.json()
-                setTasks(data.tasks)
-                setCurrentPage(data.currentPage)
-                setTotalPages(data.totalPages)
-                setTotalTasks(data.totalTasks)
+                const data = await res.json();
+                setTasks(data.tasks);
+                setCurrentPage(data.currentPage);
+                setTotalPages(data.totalPages);
+                setTotalTasks(data.totalTasks);
             } else {
-                toast.error('Failed to fetch tasks')
+                toast.error('Failed to fetch tasks');
             }
         } catch (error) {
-            console.error('Error fetching tasks:', error)
-            toast.error('An error occurred while fetching tasks')
+            console.error('Error fetching tasks:', error);
+            toast.error('An error occurred while fetching tasks');
         } finally {
             setLoading(false);
         }
-    }
+    };
 
     const addTask = async (e) => {
         e.preventDefault();
-        if (!newTask.title.trim()) {
-            toast.error('Task title is required');
-            return;
-        }
-        if (!newTask.category.trim()) {
-            toast.error('Category is required');
-            return;
-        }
-        if (!newTask.dueDate) {
-            toast.error('Due date is required');
-            return;
-        }
         try {
-            const res = await fetch('/api/tasks', {
+            const response = await fetch('/api/tasks', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newTask)
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(newTask),
             });
-            if (!res.ok) {
-                const errorData = await res.json();
-                throw new Error(errorData.error || 'Failed to add task');
+
+            if (!response.ok) {
+                throw new Error('Failed to add task');
             }
-            const addedTask = await res.json();
-            setTasks(prevTasks => Array.isArray(prevTasks) ? [...prevTasks, addedTask] : [addedTask]);
-            setNewTask({ title: '', category: '', dueDate: '', priority: 1 });
+
+            const addedTask = await response.json();
+            setTasks(prevTasks => [addedTask, ...prevTasks]);
+            setNewTask({
+                title: '',
+                category: 'Personal',
+                dueDate: new Date().toISOString().split('T')[0],
+                priority: 1
+            });
             toast.success('Task added successfully');
-            fetchTasks(1); // Refetch the first page of tasks
         } catch (error) {
             console.error('Error adding task:', error);
             toast.error(error.message || 'Failed to add task');
@@ -124,29 +120,31 @@ export default function Home() {
         setEditingTask(null);
     };
 
-    const updateTask = async (id, updates) => {
-        if (!updates) {
-            // If no updates provided, we're starting to edit
+    const updateTask = async (id, updates = null) => {
+        if (updates === null) {
+            // If no updates provided, set the task to edit mode
             const taskToEdit = tasks.find(task => task.id === id);
             setEditingTask(taskToEdit);
             return;
         }
 
         try {
-            const res = await fetch(`/api/tasks?id=${id}`, {
+            const response = await fetch(`/api/tasks?id=${id}`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(updates)
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(updates),
             });
-            if (!res.ok) {
-                const errorData = await res.json();
-                throw new Error(errorData.error || 'Failed to update task');
+
+            if (!response.ok) {
+                throw new Error('Failed to update task');
             }
-            const updatedTask = await res.json();
-            setTasks(prevTasks => prevTasks.map(task => task.id === id ? updatedTask : task));
+
+            const updatedTask = await response.json();
+            setTasks(tasks => tasks.map(task => task.id === id ? updatedTask : task));
             setEditingTask(null); // Clear editing state
             toast.success('Task updated successfully');
-            fetchTasks(currentPage); // Refetch the current page of tasks
         } catch (error) {
             console.error('Error updating task:', error);
             toast.error(error.message || 'Failed to update task');
@@ -212,6 +210,10 @@ export default function Home() {
         return null;
     }
 
+    if (loading) {
+        return <LoadingSpinner />;
+    }
+
     return (
         <ErrorBoundary>
             <div className="container mx-auto p-4">
@@ -233,7 +235,7 @@ export default function Home() {
                             type="text"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            placeholder="Search tasks"
+                            placeholder="Search tasks here..."
                             className="w-full p-2 border rounded"
                         />
                     </div>
@@ -252,14 +254,12 @@ export default function Home() {
                         </div>
                         <div className="flex space-x-2">
                             <select
-                                value={newCategory}
-                                onChange={(e) => setNewCategory(e.target.value)}
-                                className="p-2 border rounded flex-grow"
+                                value={newTask.category}
+                                onChange={(e) => setNewTask({ ...newTask, category: e.target.value })}
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
                             >
                                 {CATEGORIES.map((category) => (
-                                    <option key={category} value={category}>
-                                        {category}
-                                    </option>
+                                    <option key={category} value={category}>{category}</option>
                                 ))}
                             </select>
                             <input
@@ -313,9 +313,9 @@ export default function Home() {
                                                 className="mb-2 p-2 border rounded w-full"
                                             />
                                             <select
-                                                value={editingTask.priority}
-                                                onChange={(e) => setEditingTask({ ...editingTask, priority: Number(e.target.value) })}
-                                                className="mb-2 p-2 border rounded w-full"
+                                                value={newTask.priority}
+                                                onChange={(e) => setNewTask({ ...newTask, priority: Number(e.target.value) })}
+                                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
                                             >
                                                 <option value={1}>Low</option>
                                                 <option value={2}>Medium</option>
@@ -343,7 +343,7 @@ export default function Home() {
                                                     <button onClick={() => deleteTask(task.id)} className="text-red-500">Delete</button>
                                                 </div>
                                             </div>
-                                            <div className="mt-2 text-sm text-gray-600">
+                                            <div className="flex justify-around items-center mt-2 text-sm text-gray-600">
                                                 <p>Category: {task.category}</p>
                                                 <p>Due Date: {new Date(task.dueDate).toLocaleDateString()}</p>
                                                 <p>Priority: {task.priority}</p>
