@@ -92,7 +92,7 @@ export default async function handler(req, res) {
                 data: {
                     title,
                     category,
-                    dueDateTime: new Date(dueDateTime), // Use dueDateTime instead of dueDate
+                    dueDateTime: new Date(dueDateTime),
                     priority,
                     user: { connect: { id: userId } },
                 },
@@ -100,9 +100,15 @@ export default async function handler(req, res) {
 
             // Schedule a reminder for the task
             const reminderTime = new Date(dueDateTime);
-            schedule.scheduleJob(reminderTime, () => {
-                const io = req.socket.server.io;
-                io.emit('taskDue', newTask);
+            schedule.scheduleJob(reminderTime, async () => {
+                const task = await prisma.task.findUnique({
+                    where: { id: newTask.id },
+                });
+
+                if (!task.completed) {
+                    const io = req.socket.server.io;
+                    io.emit('taskDue', task);
+                }
             });
 
             res.status(201).json(newTask);

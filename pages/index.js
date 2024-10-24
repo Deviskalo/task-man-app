@@ -100,18 +100,20 @@ export default function Home() {
             // Real-time notification setup
             socket.on('newTask', (task) => {
                 setTasks((prevTasks) => [task, ...prevTasks]);
-                toast.success(`New task added: ${task.title}`); // Notify user
+                toast.success(`New task added: ${task.title}`);
             });
 
             // Listen for task due events
             socket.on('taskDue', (task) => {
                 console.log('Task due:', task);
-                toast.success(`Task due: ${task.title}`); // Notify the user
+                toast(`Reminder: Task "${task.title}" is due now!`, {
+                    icon: '⚠️', // Use an icon to indicate a warning
+                });
             });
 
             return () => {
-                socket.off('newTask'); // Clean up the listener
-                socket.off('taskDue'); // Clean up the listener on unmount
+                socket.off('newTask');
+                socket.off('taskDue');
             };
         }
     }, [session, currentPage, debouncedSearchTerm]);
@@ -160,6 +162,29 @@ export default function Home() {
             socket.off('taskDue'); // Clean up the listener on unmount
         };
     }, []);
+
+    useEffect(() => {
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js')
+                .then(function (registration) {
+                    console.log('Service Worker registered with scope:', registration.scope);
+                })
+                .catch(function (error) {
+                    console.error('Service Worker registration failed:', error);
+                });
+        }
+
+        // Request notification permission
+        if (Notification.permission !== 'granted') {
+            Notification.requestPermission().then(permission => {
+                if (permission === 'granted') {
+                    console.log('Notification permission granted.');
+                } else {
+                    console.log('Notification permission denied.');
+                }
+            });
+        }
+    }, []); // Empty dependency array ensures this runs once on component mount
 
     const fetchTasks = async (page = currentPage, search = debouncedSearchTerm) => {
         if (!session) return;
@@ -313,6 +338,23 @@ export default function Home() {
             fetchTasks(currentPage + 1);
         }
     };
+
+    async function subscribeUser() {
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: 'YOUR_PUBLIC_VAPID_KEY' // Replace with your VAPID key
+        });
+
+        // Send subscription to your server
+        await fetch('/api/subscribe', {
+            method: 'POST',
+            body: JSON.stringify(subscription),
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+    }
 
     if (error) {
         return <div>Error: {error}</div>;
