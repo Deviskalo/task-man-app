@@ -72,26 +72,32 @@ export default async function handler(req, res) {
         }
     } else if (req.method === 'POST') {
         try {
-            const { title, category, dueDate, priority } = req.body;
+            const { title, category, dueDateTime, priority, userId } = req.body;
 
-            // Validation
-            if (!title || !category || !dueDate) {
-                return res.status(400).json({ error: 'Title, category, and due date are required' });
+            // Log the incoming request body for debugging
+            console.log('Incoming request body:', req.body);
+
+            // Validate the incoming data
+            if (!title || !dueDateTime || !priority || !userId) {
+                return res.status(400).json({ error: 'Missing required fields' });
             }
 
-            const task = await prisma.task.create({
+            // Create the new task object
+            const newTask = await prisma.task.create({
                 data: {
                     title,
                     category,
-                    dueDate: new Date(dueDate),
-                    priority: Number(priority),
-                    userId
-                }
+                    dueDate: new Date(dueDateTime), // Ensure dueDate is a Date object
+                    priority,
+                    user: { connect: { id: userId } }, // Connect the task to the user
+                },
             });
-            res.status(201).json(task);
+
+            // Respond with the created task
+            res.status(201).json(newTask);
         } catch (error) {
-            console.error('Error creating task:', error);
-            res.status(500).json({ error: 'Failed to create task' });
+            console.error('Error inserting task:', error);
+            res.status(500).json({ error: 'Failed to add task' });
         }
     } else if (req.method === 'GET') {
         const { page = 1, limit = 5, search = '' } = req.query;

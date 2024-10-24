@@ -12,7 +12,12 @@ import { parse, isValid, startOfDay } from 'date-fns'
 import debounce from 'lodash/debounce'
 import Image from 'next/image'
 import EditProfile from '../components/EditProfile'
+import io from 'socket.io-client'; // Import Socket.IO
+import DatePicker from 'react-datepicker'; // Ensure you have this import
+import 'react-datepicker/dist/react-datepicker.css'; // Ensure you have this import
+import TimePicker from 'react-time-picker'; // Import the time picker
 
+const socket = io(); // This will connect to the server at the same URL
 
 const taskSchema = Yup.object().shape({
     title: Yup.string().required('Title is required').max(100, 'Title is too long'),
@@ -51,6 +56,7 @@ export default function Home() {
         title: '',
         category: 'Personal', // Set a default category
         dueDate: new Date().toISOString().split('T')[0], // Set today as the default due date
+        time: '12:00', // Set a default time
         priority: 1
     })
     const router = useRouter()
@@ -90,9 +96,19 @@ export default function Home() {
 
     useEffect(() => {
         if (session) {
-            fetchTasks(currentPage, debouncedSearchTerm)
+            fetchTasks(currentPage, debouncedSearchTerm);
+
+            // Real-time notification setup
+            socket.on('newTask', (task) => {
+                setTasks((prevTasks) => [task, ...prevTasks]);
+                toast.success(`New task added: ${task.title}`); // Notify user
+            });
+
+            return () => {
+                socket.off('newTask'); // Clean up the listener
+            };
         }
-    }, [session, debouncedSearchTerm, currentPage])
+    }, [session, currentPage, debouncedSearchTerm]);
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -104,6 +120,27 @@ export default function Home() {
         document.addEventListener('mousedown', handleClickOutside)
         return () => document.removeEventListener('mousedown', handleClickOutside)
     }, [])
+
+    useEffect(() => {
+        const checkDueTasks = () => {
+            const now = new Date();
+            tasks.forEach(task => {
+                const dueDateTime = new Date(task.dueDateTime);
+                if (dueDateTime <= now && !task.completed) {
+                    toast.success(`Task due: ${task.title}`); // Notify user
+                    // Optionally, mark the task as completed or handle it as needed
+                }
+            });
+        };
+
+        const intervalId = setInterval(checkDueTasks, 60000); // Check every minute
+
+        return () => clearInterval(intervalId); // Cleanup on unmount
+    }, [tasks]);
+
+    useEffect(() => {
+        fetch('/api/socket'); // This will initialize the Socket.IO server
+    }, []);
 
     const fetchTasks = async (page = currentPage, search = debouncedSearchTerm) => {
         if (!session) return;
@@ -130,20 +167,21 @@ export default function Home() {
     const addTask = async (e) => {
         e.preventDefault();
         try {
-            // Create a copy of newTask with the date properly formatted
-            const taskToValidate = {
-                ...newTask,
-                dueDate: newTask.dueDate ? parse(newTask.dueDate, 'yyyy-MM-dd', new Date()) : null
-            };
+            const dueDate = new Date(newTask.dueDate);
+            const dueTime = newTask.time;
 
-            // Validate the new task using taskSchema
-            await taskSchema.validate(taskToValidate);
+            // Combine date and time into a single Date object
+            const dueDateTime = new Date(`${dueDate.toISOString().split('T')[0]}T${dueTime}`);
 
-            // For sending to the server, convert Date object to ISO string
             const taskToSend = {
-                ...taskToValidate,
-                dueDate: taskToValidate.dueDate ? taskToValidate.dueDate.toISOString() : null
+                title: newTask.title,
+                category: newTask.category,
+                dueDateTime: dueDateTime.toISOString(), // Store as ISO string
+                priority: newTask.priority,
+                userId: session.user.id, // Assuming you have the user ID from the session
             };
+
+            console.log('Task to send:', taskToSend); // Log the task to send
 
             const response = await fetch('/api/tasks', {
                 method: 'POST',
@@ -158,22 +196,18 @@ export default function Home() {
             }
 
             const addedTask = await response.json();
-            setTasks(prevTasks => [addedTask, ...prevTasks]);
+            setTasks((prevTasks) => [addedTask, ...prevTasks]);
             setNewTask({
                 title: '',
                 category: 'Personal',
                 dueDate: new Date().toISOString().split('T')[0],
-                priority: 1
+                time: '12:00',
+                priority: 1,
             });
             toast.success('Task added successfully');
         } catch (error) {
             console.error('Error adding task:', error);
-            if (error instanceof Yup.ValidationError) {
-                // If it's a validation error, show the specific error message
-                toast.error(error.message);
-            } else {
-                toast.error(error.message || 'Failed to add task');
-            }
+            toast.error(error.message || 'Failed to add task');
         }
     };
 
@@ -360,10 +394,14 @@ export default function Home() {
                                     <option key={category} value={category}>{category}</option>
                                 ))}
                             </select>
-                            <input
-                                type="date"
-                                value={newTask.dueDate}
-                                onChange={(e) => setNewTask({ ...newTask, dueDate: e.target.value })}
+                            <DatePicker
+                                selected={newTask.dueDate ? new Date(newTask.dueDate) : null}
+                                onChange={(date) => setNewTask({ ...newTask, dueDate: date })}
+                                showTimeSelect
+                                timeFormat="HH:mm"
+                                timeIntervals={15}
+                                dateFormat="Pp"
+                                placeholderText="Select due date and time"
                                 className="p-2 border rounded"
                             />
                             <select
