@@ -54,9 +54,8 @@ export default function Home() {
     const [tasks, setTasks] = useState([])
     const [newTask, setNewTask] = useState({
         title: '',
-        category: 'Personal', // Set a default category
-        dueDate: new Date().toISOString().split('T')[0], // Set today as the default due date
-        time: '12:00', // Set a default time
+        category: 'Personal',
+        dueDateTime: new Date().toISOString(), // Change this from dueDate to dueDateTime
         priority: 1
     })
     const router = useRouter()
@@ -104,8 +103,15 @@ export default function Home() {
                 toast.success(`New task added: ${task.title}`); // Notify user
             });
 
+            // Listen for task due events
+            socket.on('taskDue', (task) => {
+                console.log('Task due:', task);
+                toast.success(`Task due: ${task.title}`); // Notify the user
+            });
+
             return () => {
                 socket.off('newTask'); // Clean up the listener
+                socket.off('taskDue'); // Clean up the listener on unmount
             };
         }
     }, [session, currentPage, debouncedSearchTerm]);
@@ -140,6 +146,19 @@ export default function Home() {
 
     useEffect(() => {
         fetch('/api/socket'); // This will initialize the Socket.IO server
+
+        socket.on('connect', () => {
+            console.log('Socket connected'); // Log when the socket connects
+        });
+
+        socket.on('taskDue', (task) => {
+            console.log('Task due:', task);
+            toast.success(`Reminder: ${task.title} is due now!`); // Notify the user
+        });
+
+        return () => {
+            socket.off('taskDue'); // Clean up the listener on unmount
+        };
     }, []);
 
     const fetchTasks = async (page = currentPage, search = debouncedSearchTerm) => {
@@ -149,6 +168,7 @@ export default function Home() {
             const res = await fetch(`/api/tasks?page=${page}&search=${encodeURIComponent(search)}&limit=${tasksPerPage}`);
             if (res.ok) {
                 const data = await res.json();
+                console.log('Fetched tasks:', data.tasks); // Log fetched tasks
                 setTasks(data.tasks);
                 setCurrentPage(data.currentPage);
                 setTotalPages(data.totalPages);
@@ -167,21 +187,15 @@ export default function Home() {
     const addTask = async (e) => {
         e.preventDefault();
         try {
-            const dueDate = new Date(newTask.dueDate);
-            const dueTime = newTask.time;
-
-            // Combine date and time into a single Date object
-            const dueDateTime = new Date(`${dueDate.toISOString().split('T')[0]}T${dueTime}`);
-
             const taskToSend = {
                 title: newTask.title,
                 category: newTask.category,
-                dueDateTime: dueDateTime.toISOString(), // Store as ISO string
+                dueDateTime: new Date(newTask.dueDateTime).toISOString(), // Ensure it's an ISO string
                 priority: newTask.priority,
-                userId: session.user.id, // Assuming you have the user ID from the session
+                userId: session.user.id,
             };
 
-            console.log('Task to send:', taskToSend); // Log the task to send
+            console.log('Task to send:', taskToSend);
 
             const response = await fetch('/api/tasks', {
                 method: 'POST',
@@ -200,8 +214,7 @@ export default function Home() {
             setNewTask({
                 title: '',
                 category: 'Personal',
-                dueDate: new Date().toISOString().split('T')[0],
-                time: '12:00',
+                dueDateTime: new Date().toISOString(), // Reset to current date/time
                 priority: 1,
             });
             toast.success('Task added successfully');
@@ -214,7 +227,7 @@ export default function Home() {
     const startEditing = (task) => {
         setEditingTask({
             ...task,
-            dueDate: task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '',
+            dueDateTime: task.dueDateTime ? new Date(task.dueDateTime).toISOString().slice(0, 16) : '', // Format for datetime-local input
             priority: task.priority || 1
         });
     };
@@ -394,14 +407,10 @@ export default function Home() {
                                     <option key={category} value={category}>{category}</option>
                                 ))}
                             </select>
-                            <DatePicker
-                                selected={newTask.dueDate ? new Date(newTask.dueDate) : null}
-                                onChange={(date) => setNewTask({ ...newTask, dueDate: date })}
-                                showTimeSelect
-                                timeFormat="HH:mm"
-                                timeIntervals={15}
-                                dateFormat="Pp"
-                                placeholderText="Select due date and time"
+                            <input
+                                type="datetime-local"
+                                value={newTask.dueDateTime.slice(0, 16)} // Format for datetime-local input
+                                onChange={(e) => setNewTask({ ...newTask, dueDateTime: e.target.value })}
                                 className="p-2 border rounded"
                             />
                             <select
@@ -443,14 +452,14 @@ export default function Home() {
                                                 className="mb-2 p-2 border rounded w-full"
                                             />
                                             <input
-                                                type="date"
-                                                value={editingTask.dueDate}
-                                                onChange={(e) => setEditingTask({ ...editingTask, dueDate: e.target.value })}
+                                                type="datetime-local"
+                                                value={editingTask.dueDateTime.slice(0, 16)}
+                                                onChange={(e) => setEditingTask({ ...editingTask, dueDateTime: e.target.value })}
                                                 className="mb-2 p-2 border rounded w-full"
                                             />
                                             <select
-                                                value={newTask.priority}
-                                                onChange={(e) => setNewTask({ ...newTask, priority: Number(e.target.value) })}
+                                                value={editingTask.priority}
+                                                onChange={(e) => setEditingTask({ ...editingTask, priority: Number(e.target.value) })}
                                                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
                                             >
                                                 <option value={1}>Low</option>
@@ -481,7 +490,10 @@ export default function Home() {
                                             </div>
                                             <div className="flex justify-around items-center mt-2 text-sm text-gray-600">
                                                 <p>Category: {task.category}</p>
-                                                <p>Due Date: {new Date(task.dueDate).toLocaleDateString()}</p>
+                                                <p>Due: {task.dueDateTime ? new Date(task.dueDateTime).toLocaleString('en-US', {
+                                                    dateStyle: 'short',
+                                                    timeStyle: 'short'
+                                                }) : 'Not set'}</p>
                                                 <p className={`px-2 py-1 rounded ${priorityColors[task.priority]}`}>
                                                     Priority: {priorityLabels[task.priority - 1]}
                                                 </p>
