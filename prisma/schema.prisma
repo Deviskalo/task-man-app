@@ -14,28 +14,38 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
+  id            String         @id @default(cuid())
   name          String?
-  email         String?   @unique
+  email         String?        @unique
   emailVerified DateTime?
   image         String?
   password      String?
   accounts      Account[]
   sessions      Session[]
   tasks         Task[]
+  Subscription  Subscription[]
+}
+
+model Subscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String
+  keys      String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
 }
 
 model Task {
-  id        String    @id @default(cuid())
-  title     String
-  completed Boolean   @default(false)
-  category  String?
-  dueDate   DateTime?
-  priority  Int       @default(1)
-  userId    String
-  user      User      @relation(fields: [userId], references: [id])
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  title       String
+  completed   Boolean   @default(false)
+  category    String?
+  dueDateTime DateTime?
+  priority    Int       @default(1)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model Account {

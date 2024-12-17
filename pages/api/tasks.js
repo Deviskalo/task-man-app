@@ -2,6 +2,9 @@ import { getToken } from "next-auth/jwt"
 import prisma from "../../lib/prisma"
 import * as Yup from 'yup'
 import { CATEGORIES } from '../../utils/constants'
+import { PrismaClient } from '@prisma/client';
+import schedule from 'node-schedule';
+import { Server } from 'socket.io';
 
 const ITEMS_PER_PAGE = 10 // Reduced from 10 to 5 for easier testing
 
@@ -12,6 +15,8 @@ const taskSchema = Yup.object().shape({
     priority: Yup.number().oneOf([1, 2, 3], 'Invalid priority').nullable(),
     completed: Yup.boolean()
 })
+
+const prismaClient = new PrismaClient();
 
 export default async function handler(req, res) {
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
@@ -26,11 +31,11 @@ export default async function handler(req, res) {
             const { id } = req.query;
             const updates = req.body;
 
-            // Only validate the fields that are being updated
+            // Update the partial schema to include dueDateTime
             const partialSchema = Yup.object().shape({
                 title: Yup.string().max(100, 'Title is too long'),
                 category: Yup.string().oneOf(CATEGORIES, 'Invalid category'),
-                dueDate: Yup.date().nullable().transform((curr, orig) => orig === '' ? null : curr),
+                dueDateTime: Yup.date().nullable(),
                 priority: Yup.number().oneOf([1, 2, 3], 'Invalid priority'),
                 completed: Yup.boolean()
             });
@@ -41,7 +46,7 @@ export default async function handler(req, res) {
                 where: { id: id, userId: userId },
                 data: {
                     ...updates,
-                    dueDate: updates.dueDate ? new Date(updates.dueDate) : undefined,
+                    dueDateTime: updates.dueDateTime ? new Date(updates.dueDateTime) : undefined,
                     priority: updates.priority ? Number(updates.priority) : undefined
                 }
             });
@@ -72,26 +77,44 @@ export default async function handler(req, res) {
         }
     } else if (req.method === 'POST') {
         try {
-            const { title, category, dueDate, priority } = req.body;
+            const { title, category, dueDateTime, priority, userId } = req.body;
 
-            // Validation
-            if (!title || !category || !dueDate) {
-                return res.status(400).json({ error: 'Title, category, and due date are required' });
+            // Log the incoming request body for debugging
+            console.log('Incoming request body:', req.body);
+
+            // Validate the incoming data
+            if (!title || !dueDateTime || !priority || !userId) {
+                return res.status(400).json({ error: 'Missing required fields' });
             }
 
-            const task = await prisma.task.create({
+            // Create the new task object
+            const newTask = await prisma.task.create({
                 data: {
                     title,
                     category,
-                    dueDate: new Date(dueDate),
-                    priority: Number(priority),
-                    userId
+                    dueDateTime: new Date(dueDateTime),
+                    priority,
+                    user: { connect: { id: userId } },
+                },
+            });
+
+            // Schedule a reminder for the task
+            const reminderTime = new Date(dueDateTime);
+            schedule.scheduleJob(reminderTime, async () => {
+                const task = await prisma.task.findUnique({
+                    where: { id: newTask.id },
+                });
+
+                if (!task.completed) {
+                    const io = req.socket.server.io;
+                    io.emit('taskDue', task);
                 }
             });
-            res.status(201).json(task);
+
+            res.status(201).json(newTask);
         } catch (error) {
-            console.error('Error creating task:', error);
-            res.status(500).json({ error: 'Failed to create task' });
+            console.error('Error inserting task:', error);
+            res.status(500).json({ error: 'Failed to add task' });
         }
     } else if (req.method === 'GET') {
         const { page = 1, limit = 5, search = '' } = req.query;
@@ -117,11 +140,17 @@ export default async function handler(req, res) {
                 orderBy: { createdAt: 'desc' },
             });
 
+            // Ensure dueDateTime is correctly formatted
+            const formattedTasks = tasks.map(task => ({
+                ...task,
+                dueDateTime: task.dueDateTime ? task.dueDateTime.toISOString() : null
+            }));
+
             const totalTasks = await prisma.task.count({ where });
             const totalPages = Math.ceil(totalTasks / parseInt(limit));
 
             res.status(200).json({
-                tasks,
+                tasks: formattedTasks,
                 totalTasks,
                 currentPage: parseInt(page),
                 totalPages

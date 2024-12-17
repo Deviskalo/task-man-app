@@ -12,7 +12,12 @@ import { parse, isValid, startOfDay } from 'date-fns'
 import debounce from 'lodash/debounce'
 import Image from 'next/image'
 import EditProfile from '../components/EditProfile'
+import io from 'socket.io-client'; // Import Socket.IO
+import DatePicker from 'react-datepicker'; // Ensure you have this import
+import 'react-datepicker/dist/react-datepicker.css'; // Ensure you have this import
+import TimePicker from 'react-time-picker'; // Import the time picker
 
+const socket = io(); // This will connect to the server at the same URL
 
 const taskSchema = Yup.object().shape({
     title: Yup.string().required('Title is required').max(100, 'Title is too long'),
@@ -49,8 +54,8 @@ export default function Home() {
     const [tasks, setTasks] = useState([])
     const [newTask, setNewTask] = useState({
         title: '',
-        category: 'Personal', // Set a default category
-        dueDate: new Date().toISOString().split('T')[0], // Set today as the default due date
+        category: 'Personal',
+        dueDateTime: new Date().toISOString(), // Change this from dueDate to dueDateTime
         priority: 1
     })
     const router = useRouter()
@@ -90,9 +95,28 @@ export default function Home() {
 
     useEffect(() => {
         if (session) {
-            fetchTasks(currentPage, debouncedSearchTerm)
+            fetchTasks(currentPage, debouncedSearchTerm);
+
+            // Real-time notification setup
+            socket.on('newTask', (task) => {
+                setTasks((prevTasks) => [task, ...prevTasks]);
+                toast.success(`New task added: ${task.title}`);
+            });
+
+            // Listen for task due events
+            socket.on('taskDue', (task) => {
+                console.log('Task due:', task);
+                toast(`Reminder: Task "${task.title}" is due now!`, {
+                    icon: '⚠️', // Use an icon to indicate a warning
+                });
+            });
+
+            return () => {
+                socket.off('newTask');
+                socket.off('taskDue');
+            };
         }
-    }, [session, debouncedSearchTerm, currentPage])
+    }, [session, currentPage, debouncedSearchTerm]);
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -105,6 +129,63 @@ export default function Home() {
         return () => document.removeEventListener('mousedown', handleClickOutside)
     }, [])
 
+    useEffect(() => {
+        const checkDueTasks = () => {
+            const now = new Date();
+            tasks.forEach(task => {
+                const dueDateTime = new Date(task.dueDateTime);
+                if (dueDateTime <= now && !task.completed) {
+                    toast.success(`Task due: ${task.title}`); // Notify user
+                    // Optionally, mark the task as completed or handle it as needed
+                }
+            });
+        };
+
+        const intervalId = setInterval(checkDueTasks, 60000); // Check every minute
+
+        return () => clearInterval(intervalId); // Cleanup on unmount
+    }, [tasks]);
+
+    useEffect(() => {
+        fetch('/api/socket'); // This will initialize the Socket.IO server
+
+        socket.on('connect', () => {
+            console.log('Socket connected'); // Log when the socket connects
+        });
+
+        socket.on('taskDue', (task) => {
+            console.log('Task due:', task);
+            toast.success(`Reminder: ${task.title} is due now!`); // Notify the user
+        });
+
+        return () => {
+            socket.off('taskDue'); // Clean up the listener on unmount
+        };
+    }, []);
+
+    useEffect(() => {
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js')
+                .then(function (registration) {
+                    console.log('Service Worker registered with scope:', registration.scope);
+                })
+                .catch(function (error) {
+                    console.error('Service Worker registration failed:', error);
+                });
+        }
+
+        // Request notification permission
+        if (Notification.permission !== 'granted') {
+            Notification.requestPermission().then(permission => {
+                if (permission === 'granted') {
+                    console.log('Notification permission granted.');
+                } else {
+                    console.log('Notification permission denied.');
+                }
+            });
+        }
+    }, []); // Empty dependency array ensures this runs once on component mount
+
     const fetchTasks = async (page = currentPage, search = debouncedSearchTerm) => {
         if (!session) return;
         try {
@@ -112,6 +193,7 @@ export default function Home() {
             const res = await fetch(`/api/tasks?page=${page}&search=${encodeURIComponent(search)}&limit=${tasksPerPage}`);
             if (res.ok) {
                 const data = await res.json();
+                console.log('Fetched tasks:', data.tasks); // Log fetched tasks
                 setTasks(data.tasks);
                 setCurrentPage(data.currentPage);
                 setTotalPages(data.totalPages);
@@ -130,20 +212,15 @@ export default function Home() {
     const addTask = async (e) => {
         e.preventDefault();
         try {
-            // Create a copy of newTask with the date properly formatted
-            const taskToValidate = {
-                ...newTask,
-                dueDate: newTask.dueDate ? parse(newTask.dueDate, 'yyyy-MM-dd', new Date()) : null
-            };
-
-            // Validate the new task using taskSchema
-            await taskSchema.validate(taskToValidate);
-
-            // For sending to the server, convert Date object to ISO string
             const taskToSend = {
-                ...taskToValidate,
-                dueDate: taskToValidate.dueDate ? taskToValidate.dueDate.toISOString() : null
+                title: newTask.title,
+                category: newTask.category,
+                dueDateTime: new Date(newTask.dueDateTime).toISOString(), // Ensure it's an ISO string
+                priority: newTask.priority,
+                userId: session.user.id,
             };
+
+            console.log('Task to send:', taskToSend);
 
             const response = await fetch('/api/tasks', {
                 method: 'POST',
@@ -158,29 +235,24 @@ export default function Home() {
             }
 
             const addedTask = await response.json();
-            setTasks(prevTasks => [addedTask, ...prevTasks]);
+            setTasks((prevTasks) => [addedTask, ...prevTasks]);
             setNewTask({
                 title: '',
                 category: 'Personal',
-                dueDate: new Date().toISOString().split('T')[0],
-                priority: 1
+                dueDateTime: new Date().toISOString(), // Reset to current date/time
+                priority: 1,
             });
             toast.success('Task added successfully');
         } catch (error) {
             console.error('Error adding task:', error);
-            if (error instanceof Yup.ValidationError) {
-                // If it's a validation error, show the specific error message
-                toast.error(error.message);
-            } else {
-                toast.error(error.message || 'Failed to add task');
-            }
+            toast.error(error.message || 'Failed to add task');
         }
     };
 
     const startEditing = (task) => {
         setEditingTask({
             ...task,
-            dueDate: task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '',
+            dueDateTime: task.dueDateTime ? new Date(task.dueDateTime).toISOString().slice(0, 16) : '', // Format for datetime-local input
             priority: task.priority || 1
         });
     };
@@ -266,6 +338,23 @@ export default function Home() {
             fetchTasks(currentPage + 1);
         }
     };
+
+    async function subscribeUser() {
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: 'YOUR_PUBLIC_VAPID_KEY' // Replace with your VAPID key
+        });
+
+        // Send subscription to your server
+        await fetch('/api/subscribe', {
+            method: 'POST',
+            body: JSON.stringify(subscription),
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+    }
 
     if (error) {
         return <div>Error: {error}</div>;
@@ -361,9 +450,9 @@ export default function Home() {
                                 ))}
                             </select>
                             <input
-                                type="date"
-                                value={newTask.dueDate}
-                                onChange={(e) => setNewTask({ ...newTask, dueDate: e.target.value })}
+                                type="datetime-local"
+                                value={newTask.dueDateTime.slice(0, 16)} // Format for datetime-local input
+                                onChange={(e) => setNewTask({ ...newTask, dueDateTime: e.target.value })}
                                 className="p-2 border rounded"
                             />
                             <select
@@ -405,14 +494,14 @@ export default function Home() {
                                                 className="mb-2 p-2 border rounded w-full"
                                             />
                                             <input
-                                                type="date"
-                                                value={editingTask.dueDate}
-                                                onChange={(e) => setEditingTask({ ...editingTask, dueDate: e.target.value })}
+                                                type="datetime-local"
+                                                value={editingTask.dueDateTime.slice(0, 16)}
+                                                onChange={(e) => setEditingTask({ ...editingTask, dueDateTime: e.target.value })}
                                                 className="mb-2 p-2 border rounded w-full"
                                             />
                                             <select
-                                                value={newTask.priority}
-                                                onChange={(e) => setNewTask({ ...newTask, priority: Number(e.target.value) })}
+                                                value={editingTask.priority}
+                                                onChange={(e) => setEditingTask({ ...editingTask, priority: Number(e.target.value) })}
                                                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
                                             >
                                                 <option value={1}>Low</option>
@@ -443,7 +532,10 @@ export default function Home() {
                                             </div>
                                             <div className="flex justify-around items-center mt-2 text-sm text-gray-600">
                                                 <p>Category: {task.category}</p>
-                                                <p>Due Date: {new Date(task.dueDate).toLocaleDateString()}</p>
+                                                <p>Due: {task.dueDateTime ? new Date(task.dueDateTime).toLocaleString('en-US', {
+                                                    dateStyle: 'short',
+                                                    timeStyle: 'short'
+                                                }) : 'Not set'}</p>
                                                 <p className={`px-2 py-1 rounded ${priorityColors[task.priority]}`}>
                                                     Priority: {priorityLabels[task.priority - 1]}
                                                 </p>
