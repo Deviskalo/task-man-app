@@ -1,4 +1,5 @@
-import { getSession } from 'next-auth/react'
+import { getServerSession } from "next-auth/next"
+import { authOptions } from "../auth/[...nextauth]"
 import { openDb } from '../../../lib/db'
 
 export default async function handler(req, res) {
@@ -6,7 +7,7 @@ export default async function handler(req, res) {
         return res.status(405).json({ message: 'Method not allowed' })
     }
 
-    const session = await getSession({ req })
+    const session = await getServerSession(req, res, authOptions)
 
     if (!session) {
         return res.status(401).json({ message: 'Not authenticated' })
@@ -21,7 +22,14 @@ export default async function handler(req, res) {
             [name, session.user.email]
         )
 
-        res.status(200).json({ name })
+        const updatedUser = await db.get(
+            'SELECT * FROM users WHERE email = ?',
+            [session.user.email]
+        )
+
+        console.log("Updated user in database:", updatedUser)
+
+        res.status(200).json({ name: updatedUser.name })
     } catch (error) {
         console.error('Error updating user:', error)
         res.status(500).json({ message: 'Error updating user' })
